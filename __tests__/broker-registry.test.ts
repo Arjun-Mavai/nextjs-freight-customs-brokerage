@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { BrokerTenantRegistry } from '../src/lib/tenants/broker-registry';
+import { BrokerTenantRegistry } from '@/lib/tenants/broker-registry';
 
 describe('BrokerTenantRegistry', () => {
   let registry: BrokerTenantRegistry;

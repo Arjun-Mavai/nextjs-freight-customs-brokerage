@@ -291,4 +291,86 @@ export class ManifestIdempotencyGuard {
     }
 
     if (existing.status === 'IN_PROGRESS') {
-      const lockAgeMs = params.nowMs - existing.
+      const lockAgeMs = params.nowMs - existing.updatedAtMs;
+      if (lockAgeMs <= this.lockTimeoutMs) {
+        return {
+          decision: 'REJECT_CONFLICT_IN_PROGRESS',
+          entry: { ...existing },
+          reason: `Concurrent execution still in progress (age ${lockAgeMs}ms)`,
+        };
+      }
+    }
+
+    // Either FAILED_RETRYABLE or expired IN_PROGRESS lock
+    existing.status = 'IN_PROGRESS';
+    existing.updatedAtMs = params.nowMs;
+    existing.attemptCount += 1;
+
+    return {
+      decision: 'PROCEED_RETRY_AFTER_FAILURE',
+      entry: { ...existing },
+    };
+  }
+
+  /**
+   * Commits a completed response payload to the idempotency store.
+   */
+  public commitSuccess<TResponse = unknown>(params: {
+    brokerId: string;
+    idempotencyKey: string;
+    httpStatusCode: number;
+    responseBody: TResponse;
+    nowMs: number;
+  }): IdempotencyCacheEntry<TResponse> {
+    const compositeKey = this.buildCompositeKey(
+      params.brokerId,
+      params.idempotencyKey
+    );
+    const existing = this.records.get(compositeKey) as
+      | IdempotencyCacheEntry<TResponse>
+      | undefined;
+
+    if (!existing) {
+      throw new Error(
+        `Cannot commit unknown idempotency key ${params.idempotencyKey} for broker ${params.brokerId}`
+      );
+    }
+
+    existing.status = 'COMPLETED';
+    existing.httpStatusCode = params.httpStatusCode;
+    existing.cachedResponse = params.responseBody;
+    existing.updatedAtMs = params.nowMs;
+
+    return { ...existing };
+  }
+
+  /**
+   * Marks an in-progress attempt as retryable failure so subsequent client retries can proceed.
+   */
+  public markRetryableFailure(params: {
+    brokerId: string;
+    idempotencyKey: string;
+    nowMs: number;
+  }): void {
+    const compositeKey = this.buildCompositeKey(
+      params.brokerId,
+      params.idempotencyKey
+    );
+    const existing = this.records.get(compositeKey);
+    if (existing) {
+      existing.status = 'FAILED_RETRYABLE';
+      existing.updatedAtMs = params.nowMs;
+    }
+  }
+
+  public purgeExpired(nowMs: number): number {
+    let purged = 0;
+    for (const [key, entry] of this.records.entries()) {
+      if (entry.expiresAtMs <= nowMs) {
+        this.records.delete(key);
+        purged++;
+      }
+    }
+    return purged;
+  }
+}
